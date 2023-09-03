@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"unicode"
-	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
 )
 
 // Example:
@@ -86,8 +85,15 @@ func main() {
 
 		fmt.Printf("Tracker URL: %v\n", metaInfo.Announce)
 		fmt.Printf("Length: %v\n", metaInfo.Info.Length)
+
+		var buffer_ bytes.Buffer
+		if err := bencode.Marshal(&buffer_, metaInfo.Info); err != nil {
+			fmt.Println("Error marshalling BEncode:", err)
+			return
+		}
+		sum := sha1.Sum(buffer_.Bytes())
 		// %x for hex formatting
-		fmt.Printf("Info Hash: %x\n", createInfoHash(metaInfo))
+		fmt.Printf("Info Hash: %x\n", sum)
 
 	} else {
 		fmt.Println("Unknown command: " + command)
@@ -95,22 +101,13 @@ func main() {
 	}
 }
 
-func createInfoHash(metaInfo MetaInfo) interface{} {
-	var buffer_ bytes.Buffer
-	if err := bencode.Marshal(&buffer_, metaInfo.Info); err != nil {
-		return ""
-	}
-	sum := sha1.Sum(buffer_.Bytes())
-	return sum
-}
-
 type MetaInfo struct {
-	Announce string `json:"announce"`
-	Info     Info   `json:"info"`
+	Announce string `json:"announce" bencode:"announce"`
+	Info     Info   `json:"info" bencode:"info"`
 }
 type Info struct {
-	Length    int64  `json:"length"`
-	Name      string `json:"name"`
-	PiecesLen int64  `json:"piece length"`
-	Pieces    string `json:"pieces"`
+	Length    int64  `json:"length" bencode:"length"`
+	Name      string `json:"name" bencode:"name"`
+	PiecesLen int64  `json:"piece length" bencode:"piece length"`
+	Pieces    string `json:"pieces" bencode:"pieces"`
 }
