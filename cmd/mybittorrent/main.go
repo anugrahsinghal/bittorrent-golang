@@ -86,7 +86,7 @@ func main() {
 
 		var metaInfo MetaInfo
 		if err := json.Unmarshal(jsonOutput, &metaInfo); err != nil {
-			fmt.Println("Error unmarshaling JSON:", err)
+			fmt.Println("Error unmarshalling JSON:", err)
 			return
 		}
 
