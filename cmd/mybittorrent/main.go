@@ -67,8 +67,45 @@ func main() {
 
 		jsonOutput, _ := json.Marshal(decoded)
 		fmt.Println(string(jsonOutput))
+	} else if command == "info" {
+		// read the file
+		fileNameOrPath := os.Args[2]
+		// use std lib to read file's contents as a string
+		file, err := os.ReadFile(fileNameOrPath)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		decoded, err := bencode.Decode(bytes.NewReader(file))
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		jsonOutput, _ := json.Marshal(decoded)
+
+		var metaInfo MetaInfo
+		if err := json.Unmarshal(jsonOutput, &metaInfo); err != nil {
+			fmt.Println("Error unmarshaling JSON:", err)
+			return
+		}
+
+		fmt.Printf("Tracker URL: %v\n", metaInfo.Announce)
+		fmt.Printf("Length: %v\n", metaInfo.Info.Length)
+
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
+}
+
+type MetaInfo struct {
+	Announce string `json:"announce"`
+	Info     Info   `json:"info"`
+}
+type Info struct {
+	Length    int64  `json:"length"`
+	Name      string `json:"name"`
+	PiecesLen int64  `json:"piece length"`
+	Pieces    string `json:"pieces"`
 }
