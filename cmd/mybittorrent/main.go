@@ -75,16 +75,9 @@ func main() {
 	} else if command == "info" {
 		// read the file
 		fileNameOrPath := os.Args[2]
-		// use std lib to read file's contents as a string
-		file, err := os.ReadFile(fileNameOrPath)
+		metaInfo, err := getMetaInfo(fileNameOrPath)
 		if err != nil {
 			fmt.Println(err)
-			return
-		}
-
-		var metaInfo MetaInfo
-		if err := bencode.Unmarshal(bytes.NewReader(file), &metaInfo); err != nil {
-			fmt.Println("Error unmarshalling JSON:", err)
 			return
 		}
 
@@ -111,39 +104,63 @@ func main() {
 	} else if command == "peers" {
 		// read the file
 		fileNameOrPath := os.Args[2]
-		// use std lib to read file's contents as a string
-		file, err := os.ReadFile(fileNameOrPath)
+		metaInfo, err := getMetaInfo(fileNameOrPath)
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
 
-		var metaInfo MetaInfo
-		if err := bencode.Unmarshal(bytes.NewReader(file), &metaInfo); err != nil {
-			fmt.Println("Error unmarshalling JSON:", err)
+		printPeers(metaInfo)
+
+	} else if command == "handshake" {
+		fileNameOrPath := os.Args[2]
+		metaInfo, err := getMetaInfo(fileNameOrPath)
+		if err != nil {
+			fmt.Println(err)
 			return
 		}
 
-		response, err := makeGetRequest(metaInfo)
-
-		var trackerResponse TrackerResponse
-		err = bencode.Unmarshal(bytes.NewReader(response), &trackerResponse)
-		//fmt.Printf("trackerResponse %v\n", trackerResponse)
-
-		numPeers := len(trackerResponse.Peers) / 6
-		//fmt.Printf("numPeers %v\n", numPeers)
-		for i := 0; i < numPeers; i++ {
-			start := i * 6
-			end := start + 6
-			peer := trackerResponse.Peers[start:end]
-			ip := net.IP(peer[0:4])
-			port := binary.BigEndian.Uint16([]byte(peer[4:6]))
-			fmt.Printf("%s:%d\n", ip, port)
-		}
+		peer := os.Args[3]
+		handshake(metaInfo, peer)
 
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
+	}
+}
+
+func getMetaInfo(fileNameOrPath string) (MetaInfo, error) {
+	// use std lib to read file's contents as a string
+	file, err := os.ReadFile(fileNameOrPath)
+	if err != nil {
+		return MetaInfo{}, err
+	}
+
+	var metaInfo MetaInfo
+	if err := bencode.Unmarshal(bytes.NewReader(file), &metaInfo); err != nil {
+		fmt.Println("Error unmarshalling JSON:", err)
+		return MetaInfo{}, err
+	}
+
+	return metaInfo, nil
+}
+
+func printPeers(metaInfo MetaInfo) {
+	response, _ := makeGetRequest(metaInfo)
+
+	var trackerResponse TrackerResponse
+	bencode.Unmarshal(bytes.NewReader(response), &trackerResponse)
+	//fmt.Printf("trackerResponse %v\n", trackerResponse)
+
+	numPeers := len(trackerResponse.Peers) / 6
+	//fmt.Printf("numPeers %v\n", numPeers)
+	for i := 0; i < numPeers; i++ {
+		start := i * 6
+		end := start + 6
+		peer := trackerResponse.Peers[start:end]
+		ip := net.IP(peer[0:4])
+		port := binary.BigEndian.Uint16([]byte(peer[4:6]))
+		fmt.Printf("%s:%d\n", ip, port)
 	}
 }
 
@@ -191,6 +208,58 @@ func makeGetRequest(metaInfo MetaInfo) ([]byte, error) {
 	}
 
 	return body, nil
+}
+
+func handshake(metaInfo MetaInfo, peer string) {
+
+	// Connect to a TCP server
+	conn, err := net.Dial("tcp", peer)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+	defer conn.Close()
+
+	infoHash := createInfoHash(metaInfo)
+	//messageHolder := make([]byte, 1+19+8+20+20)
+	//messageHolder[0] = 19
+	//copy(messageHolder[1:1+19], "BitTorrent protocol")
+	//copy(messageHolder[20:20+8], make([]byte, 8))
+	//copy(messageHolder[28:28+20], infoHash[:])
+	//copy(messageHolder[48:48+20], "00112233445566778899")
+
+	myStr :=
+		"BitTorrent protocol" + // fixed header
+			"00000000" + // reserved bytes
+			string(infoHash[:]) +
+			"00112233445566778899" // peerId
+
+	// Convert int 19 to byte
+	b := make([]byte, 1)
+	b[0] = byte(19)
+
+	// Concatenate byte with rest of string
+	myBytes := append(b, []byte(myStr)...)
+
+	// issue here is that 19 is encoded as 2 characters instead of 1
+	//myStr := "19" + "BitTorrent protocol" + "00000000" + string(infoHash[:]) + "00112233445566778899"
+	_, err = conn.Write(myBytes)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+
+	fmt.Println("Message Sent, waiting for message myself")
+
+	// Receive response
+	buf := make([]byte, 1+19+8+20+20)
+	_, err = conn.Read(buf)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+
+	fmt.Printf("Peer ID: %x\n", string(buf[48:]))
 }
 
 type MetaInfo struct {
