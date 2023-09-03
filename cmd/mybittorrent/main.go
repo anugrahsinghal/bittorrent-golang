@@ -121,7 +121,9 @@ func main() {
 		}
 
 		peer := os.Args[3]
-		handshake(metaInfo, peer)
+		connection := createConnection(peer)
+		handshake(metaInfo, connection)
+		connection.Close()
 
 	} else if command == "download_piece" {
 		fileNameOrPath := os.Args[2]
@@ -131,13 +133,56 @@ func main() {
 			return
 		}
 
-		printPeers(metaInfo)
+		peers := getPeers(metaInfo)
+		connections := map[string]net.Conn{}
+		for _, peerObj := range peers {
+			peer := fmt.Sprintf("%s:%d", peerObj.IP, peerObj.Port)
+			connections[peer] = createConnection(peer)
+			handshake(metaInfo, connections[peer])
+			sendMessageToPeer(metaInfo, peerObj)
+		}
+		closeAllConnections(connections)
 
-		peer := os.Args[3]
-		handshake(metaInfo, peer)
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
+	}
+}
+
+func closeAllConnections(connections map[string]net.Conn) {
+	for _, conn := range connections {
+		conn.Close()
+	}
+}
+
+func sendMessageToPeer(info MetaInfo, peer Peer) {
+	// Peer messages consist of a message length prefix (4 bytes), message id (1 byte) and a payload (variable size).
+	//messageMetaData := make([]byte, 4+1)
+	//peerMessage := append(messageMetaData, []byte("mypayload")...)
+}
+
+func handlePeerMessage(peerMessage []byte) {
+	messageId := int(peerMessage[4])
+	switch messageId {
+	case 5: // bitfield
+		fmt.Printf(" %v\n", messageId)
+		break
+
+	case 2: // interested
+		fmt.Printf(" %v\n", messageId)
+		break
+
+	case 1: // unchoke
+		fmt.Printf(" %v\n", messageId)
+		break
+
+	case 6: // bitfield
+		fmt.Printf(" %v\n", messageId)
+		break
+	case 7: // bitfield
+		fmt.Printf(" %v\n", messageId)
+		break
+
 	}
 }
 
@@ -231,16 +276,17 @@ func makeGetRequest(metaInfo MetaInfo) ([]byte, error) {
 	return body, nil
 }
 
-func handshake(metaInfo MetaInfo, peer string) {
-
+func createConnection(peer string) net.Conn {
 	// Connect to a TCP server
 	conn, err := net.Dial("tcp", peer)
 	if err != nil {
 		fmt.Println(err)
 		panic(err)
 	}
-	defer conn.Close()
+	return conn
+}
 
+func handshake(metaInfo MetaInfo, conn net.Conn) {
 	infoHash := createInfoHash(metaInfo)
 	//messageHolder := make([]byte, 1+19+8+20+20)
 	//messageHolder[0] = 19
@@ -264,7 +310,7 @@ func handshake(metaInfo MetaInfo, peer string) {
 
 	// issue here is that 19 is encoded as 2 characters instead of 1
 	//myStr := "19" + "BitTorrent protocol" + "00000000" + string(infoHash[:]) + "00112233445566778899"
-	_, err = conn.Write(myBytes)
+	_, err := conn.Write(myBytes)
 	if err != nil {
 		fmt.Println(err)
 		panic(err)
