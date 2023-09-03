@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/jackpal/bencode-go"
 	"os"
 	"strconv"
 	"unicode"
@@ -56,8 +58,8 @@ func main() {
 
 	if command == "decode" {
 		bencodedValue := os.Args[2]
+		decoded, err := bencode.Decode(bytes.NewReader([]byte(bencodedValue)))
 
-		decoded, err := decodeBencode(bencodedValue)
 		if err != nil {
 			fmt.Println(err)
 			return
