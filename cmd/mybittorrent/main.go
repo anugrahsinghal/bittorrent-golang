@@ -95,6 +95,19 @@ func main() {
 		// %x for hex formatting
 		fmt.Printf("Info Hash: %x\n", sum)
 
+		//Piece Length: 262144
+		fmt.Printf("Piece Length: %v\n", metaInfo.Info.PiecesLen)
+		//Piece Hashes:
+		// split metaInfo.Info.Pieces for each 20 bytes
+		// each 20 bytes is a SHA1 hash
+
+		//fmt.Printf("numberOfPieces %v\n", numberOfPieces)
+		fmt.Printf("Piece Hashes: \n")
+		for i := 0; i < len(metaInfo.Info.Pieces)/20; i++ {
+			piece := metaInfo.Info.Pieces[i*20 : (i*20)+20]
+			fmt.Printf("%x\n", piece)
+		}
+
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
