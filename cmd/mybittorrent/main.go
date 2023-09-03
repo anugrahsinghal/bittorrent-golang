@@ -55,6 +55,10 @@ func decodeBencode(bencodedString string) (interface{}, error) {
 	}
 }
 
+const BITFIELD = 5
+const INTERESTED = 2
+const UNCHOKE = 1
+
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	//fmt.Println("Logs from your program will appear here!")
@@ -126,7 +130,8 @@ func main() {
 		connection.Close()
 
 	} else if command == "download_piece" {
-		fileNameOrPath := os.Args[2]
+		fileNameOrPath := os.Args[4]
+		//pieceId := os.Args[6]
 		metaInfo, err := getMetaInfo(fileNameOrPath)
 		if err != nil {
 			fmt.Println(err)
@@ -138,14 +143,52 @@ func main() {
 		for _, peerObj := range peers {
 			peer := fmt.Sprintf("%s:%d", peerObj.IP, peerObj.Port)
 			connections[peer] = createConnection(peer)
+
 			handshake(metaInfo, connections[peer])
-			sendMessageToPeer(metaInfo, peerObj)
+
+			waitFor(connections[peer], BITFIELD)
+
+			_, err := connections[peer].Write(createPeerMessage(INTERESTED, ""))
+			handleErr(err)
+			fmt.Printf("Sent INTERESTED message\n")
+
+			waitFor(connections[peer], UNCHOKE)
+
+			println("send PIECE request now")
 		}
 		closeAllConnections(connections)
-
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
+	}
+}
+
+func waitFor(connection net.Conn, expectedMessageId uint8) {
+	fmt.Printf("Waiting for %d\n", expectedMessageId)
+	for {
+		messageLengthPrefix := make([]byte, 4)
+		_, err := connection.Read(messageLengthPrefix)
+		handleErr(err)
+		receivedMessageId := make([]byte, 1)
+		_, err = connection.Read(receivedMessageId)
+		handleErr(err)
+
+		var messageId uint8
+		binary.Read(bytes.NewReader(receivedMessageId), binary.BigEndian, &messageId)
+
+		if messageId == expectedMessageId {
+			ignore := make([]byte, binary.BigEndian.Uint32(messageLengthPrefix))
+			_, err := connection.Read(ignore)
+			handleErr(err)
+			return
+		}
+	}
+}
+
+func handleErr(err error) {
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
 	}
 }
 
@@ -155,10 +198,14 @@ func closeAllConnections(connections map[string]net.Conn) {
 	}
 }
 
-func sendMessageToPeer(info MetaInfo, peer Peer) {
+func createPeerMessage(messageId uint8, payload string) []byte {
 	// Peer messages consist of a message length prefix (4 bytes), message id (1 byte) and a payload (variable size).
-	//messageMetaData := make([]byte, 4+1)
-	//peerMessage := append(messageMetaData, []byte("mypayload")...)
+	messageData := make([]byte, 4+1+len(payload))
+	copy(messageData[0:4], "0000")
+	messageData[4] = messageId
+	copy(messageData[5:], payload)
+
+	return messageData
 }
 
 func handlePeerMessage(peerMessage []byte) {
@@ -316,7 +363,7 @@ func handshake(metaInfo MetaInfo, conn net.Conn) {
 		panic(err)
 	}
 
-	fmt.Println("Message Sent, waiting for message myself")
+	fmt.Println("Handshake Message Sent, waiting for handshake message myself")
 
 	// Receive response
 	buf := make([]byte, 1+19+8+20+20)
@@ -344,6 +391,6 @@ type TrackerResponse struct {
 	Peers    string `json:"peers" bencoded:"peers"`
 }
 type Peer struct {
-	IP   []byte
+	IP   net.IP
 	Port int
 }
