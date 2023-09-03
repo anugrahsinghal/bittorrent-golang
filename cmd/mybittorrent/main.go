@@ -64,7 +64,7 @@ func main() {
 			fmt.Println(err)
 			return
 		}
-		git commit --allow-empty -m 'test' && git push origin master
+
 		jsonOutput, _ := json.Marshal(decoded)
 		fmt.Println(string(jsonOutput))
 	} else {
