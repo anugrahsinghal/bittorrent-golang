@@ -3,9 +3,14 @@ package main
 import (
 	"bytes"
 	"crypto/sha1"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"github.com/jackpal/bencode-go"
+	"io/ioutil"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"unicode"
@@ -86,12 +91,7 @@ func main() {
 		fmt.Printf("Tracker URL: %v\n", metaInfo.Announce)
 		fmt.Printf("Length: %v\n", metaInfo.Info.Length)
 
-		var buffer_ bytes.Buffer
-		if err := bencode.Marshal(&buffer_, metaInfo.Info); err != nil {
-			fmt.Println("Error marshalling BEncode:", err)
-			return
-		}
-		sum := sha1.Sum(buffer_.Bytes())
+		sum := createInfoHash(metaInfo)
 		// %x for hex formatting
 		fmt.Printf("Info Hash: %x\n", sum)
 
@@ -108,10 +108,89 @@ func main() {
 			fmt.Printf("%x\n", piece)
 		}
 
+	} else if command == "peers" {
+		// read the file
+		fileNameOrPath := os.Args[2]
+		// use std lib to read file's contents as a string
+		file, err := os.ReadFile(fileNameOrPath)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		var metaInfo MetaInfo
+		if err := bencode.Unmarshal(bytes.NewReader(file), &metaInfo); err != nil {
+			fmt.Println("Error unmarshalling JSON:", err)
+			return
+		}
+
+		response, err := makeGetRequest(metaInfo)
+
+		var trackerResponse TrackerResponse
+		err = bencode.Unmarshal(bytes.NewReader(response), &trackerResponse)
+		//fmt.Printf("trackerResponse %v\n", trackerResponse)
+
+		numPeers := len(trackerResponse.Peers) / 6
+		//fmt.Printf("numPeers %v\n", numPeers)
+		for i := 0; i < numPeers; i++ {
+			start := i * 6
+			end := start + 6
+			peer := trackerResponse.Peers[start:end]
+			ip := net.IP(peer[0:4])
+			port := binary.BigEndian.Uint16([]byte(peer[4:6]))
+			fmt.Printf("%s:%d\n", ip, port)
+		}
+
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
+}
+
+func createInfoHash(metaInfo MetaInfo) [20]byte {
+	var buffer_ bytes.Buffer
+	if err := bencode.Marshal(&buffer_, metaInfo.Info); err != nil {
+		fmt.Println("Error marshalling BEncode:", err)
+		return [20]byte{}
+	}
+	sum := sha1.Sum(buffer_.Bytes())
+	return sum
+}
+
+func makeGetRequest(metaInfo MetaInfo) ([]byte, error) {
+	baseUrl := metaInfo.Announce
+	params := url.Values{}
+	infoHash := createInfoHash(metaInfo)
+	// took help from code examples for - string(infoHash[:])
+	params.Add("info_hash", string(infoHash[:]))
+	params.Add("peer_id", "00112233445566778899")
+	params.Add("port", "6881")
+	params.Add("uploaded", "0")
+	params.Add("downloaded", "0")
+	params.Add("left", strconv.Itoa(int(metaInfo.Info.Length)))
+	params.Add("compact", "1")
+
+	// Escape the params
+	escapedParams := params.Encode()
+
+	// Construct full URL
+	URI := fmt.Sprintf("%s?%s", baseUrl, escapedParams)
+	fmt.Printf("URI %v\n", URI)
+
+	resp, err := http.DefaultClient.Get(URI)
+
+	//fmt.Printf("StatusCode = %v\n", resp.Status)
+	if err != nil {
+		return []byte{}, err
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return []byte{}, err
+	}
+
+	return body, nil
 }
 
 type MetaInfo struct {
@@ -123,4 +202,8 @@ type Info struct {
 	Name      string `json:"name" bencode:"name"`
 	PiecesLen int64  `json:"piece length" bencode:"piece length"`
 	Pieces    string `json:"pieces" bencode:"pieces"`
+}
+type TrackerResponse struct {
+	Interval int64  `json:"interval" bencoded:"interval"`
+	Peers    string `json:"peers" bencoded:"peers"`
 }
