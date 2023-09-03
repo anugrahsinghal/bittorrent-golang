@@ -123,6 +123,18 @@ func main() {
 		peer := os.Args[3]
 		handshake(metaInfo, peer)
 
+	} else if command == "download_piece" {
+		fileNameOrPath := os.Args[2]
+		metaInfo, err := getMetaInfo(fileNameOrPath)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		printPeers(metaInfo)
+
+		peer := os.Args[3]
+		handshake(metaInfo, peer)
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
@@ -145,7 +157,7 @@ func getMetaInfo(fileNameOrPath string) (MetaInfo, error) {
 	return metaInfo, nil
 }
 
-func printPeers(metaInfo MetaInfo) {
+func getPeers(metaInfo MetaInfo) []Peer {
 	response, _ := makeGetRequest(metaInfo)
 
 	var trackerResponse TrackerResponse
@@ -153,6 +165,7 @@ func printPeers(metaInfo MetaInfo) {
 	//fmt.Printf("trackerResponse %v\n", trackerResponse)
 
 	numPeers := len(trackerResponse.Peers) / 6
+	peers := make([]Peer, numPeers)
 	//fmt.Printf("numPeers %v\n", numPeers)
 	for i := 0; i < numPeers; i++ {
 		start := i * 6
@@ -160,7 +173,15 @@ func printPeers(metaInfo MetaInfo) {
 		peer := trackerResponse.Peers[start:end]
 		ip := net.IP(peer[0:4])
 		port := binary.BigEndian.Uint16([]byte(peer[4:6]))
-		fmt.Printf("%s:%d\n", ip, port)
+		peers[i] = Peer{IP: ip, Port: int(port)}
+	}
+	return peers
+}
+
+func printPeers(metaInfo MetaInfo) {
+	peers := getPeers(metaInfo)
+	for i := 0; i < len(peers); i++ {
+		fmt.Printf("%s:%d\n", peers[i].IP, peers[i].Port)
 	}
 }
 
@@ -275,4 +296,8 @@ type Info struct {
 type TrackerResponse struct {
 	Interval int64  `json:"interval" bencoded:"interval"`
 	Peers    string `json:"peers" bencoded:"peers"`
+}
+type Peer struct {
+	IP   []byte
+	Port int
 }
