@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/jackpal/bencode-go"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -58,6 +59,9 @@ func decodeBencode(bencodedString string) (interface{}, error) {
 const BITFIELD = 5
 const INTERESTED = 2
 const UNCHOKE = 1
+const REQUEST = 6
+const PIECE = 7
+const BLOCK_SIZE = 16 * 1024
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -99,9 +103,9 @@ func main() {
 		// each 20 bytes is a SHA1 hash
 
 		//fmt.Printf("numberOfPieces %v\n", numberOfPieces)
+		pieces := getPieces(metaInfo)
 		fmt.Printf("Piece Hashes: \n")
-		for i := 0; i < len(metaInfo.Info.Pieces)/20; i++ {
-			piece := metaInfo.Info.Pieces[i*20 : (i*20)+20]
+		for _, piece := range pieces {
 			fmt.Printf("%x\n", piece)
 		}
 
@@ -131,7 +135,8 @@ func main() {
 
 	} else if command == "download_piece" {
 		fileNameOrPath := os.Args[4]
-		//pieceId := os.Args[6]
+		pieceId, err := strconv.Atoi(os.Args[5])
+		handleErr(err)
 		metaInfo, err := getMetaInfo(fileNameOrPath)
 		if err != nil {
 			fmt.Println(err)
@@ -140,47 +145,101 @@ func main() {
 
 		peers := getPeers(metaInfo)
 		connections := map[string]net.Conn{}
-		for _, peerObj := range peers {
-			peer := fmt.Sprintf("%s:%d", peerObj.IP, peerObj.Port)
-			connections[peer] = createConnection(peer)
+		defer closeAllConnections(connections)
+		//for _, peerObj := range peers {
+		// since for this problem all peer will have the full file
+		peerObj := peers[0]
+		peer := fmt.Sprintf("%s:%d", peerObj.IP, peerObj.Port)
+		connections[peer] = createConnection(peer)
 
-			handshake(metaInfo, connections[peer])
+		handshake(metaInfo, connections[peer])
 
-			waitFor(connections[peer], BITFIELD)
+		waitFor(connections[peer], BITFIELD)
 
-			_, err := connections[peer].Write(createPeerMessage(INTERESTED, ""))
+		_, err = connections[peer].Write(createPeerMessage(INTERESTED, []byte{}))
+		handleErr(err)
+		fmt.Printf("Sent INTERESTED message\n")
+
+		waitFor(connections[peer], UNCHOKE)
+
+		pieceHash := getPieces(metaInfo)[pieceId]
+		fmt.Printf("PieceHash for id: %d --> %x\n", pieceId, pieceHash)
+
+		// say 256 KB
+		// for each block
+		count := 0
+		for byteOffset := 0; byteOffset < int(metaInfo.Info.PiecesLen); byteOffset = byteOffset + BLOCK_SIZE {
+			payload := make([]byte, 12)
+			binary.BigEndian.PutUint32(payload[0:4], uint32(pieceId))
+			binary.BigEndian.PutUint32(payload[4:8], uint32(byteOffset))
+			binary.BigEndian.PutUint32(payload[8:], BLOCK_SIZE)
+
+			_, err := connections[peer].Write(createPeerMessage(REQUEST, payload))
 			handleErr(err)
-			fmt.Printf("Sent INTERESTED message\n")
-
-			waitFor(connections[peer], UNCHOKE)
-
-			println("send PIECE request now")
+			count++
 		}
-		closeAllConnections(connections)
+		combinedBlockToPiece := make([]byte, metaInfo.Info.PiecesLen)
+		for i := 0; i < count; i++ {
+			data := waitFor(connections[peer], PIECE)
+
+			index := binary.BigEndian.Uint32(data[0:4])
+			if index != uint32(pieceId) {
+				panic(fmt.Sprintf("something went wrong [expected: %d -- actual: %d]", pieceId, index))
+			}
+			begin := binary.BigEndian.Uint32(data[4:8])
+			block := data[8:]
+			copy(combinedBlockToPiece[begin:], block)
+		}
+		sum := sha1.Sum(combinedBlockToPiece)
+		if string(sum[:]) == pieceHash {
+			err := os.WriteFile(os.Args[3], combinedBlockToPiece, os.ModePerm)
+			handleErr(err)
+			return
+		} else {
+			panic("unequal pieces")
+		}
+
+		//}
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
 }
 
-func waitFor(connection net.Conn, expectedMessageId uint8) {
+func getPieces(metaInfo MetaInfo) []string {
+	pieces := make([]string, len(metaInfo.Info.Pieces)/20)
+	for i := 0; i < len(metaInfo.Info.Pieces)/20; i++ {
+		piece := metaInfo.Info.Pieces[i*20 : (i*20)+20]
+		pieces[i] = piece
+	}
+	return pieces
+}
+
+func waitFor(connection net.Conn, expectedMessageId uint8) []byte {
 	fmt.Printf("Waiting for %d\n", expectedMessageId)
 	for {
 		messageLengthPrefix := make([]byte, 4)
 		_, err := connection.Read(messageLengthPrefix)
 		handleErr(err)
+		messageLength := binary.BigEndian.Uint32(messageLengthPrefix)
+		fmt.Printf("messageLength %v\n", messageLength)
+
 		receivedMessageId := make([]byte, 1)
 		_, err = connection.Read(receivedMessageId)
 		handleErr(err)
 
 		var messageId uint8
 		binary.Read(bytes.NewReader(receivedMessageId), binary.BigEndian, &messageId)
+		fmt.Printf("MessageId: %d\n", messageId)
+
+		payload := make([]byte, messageLength-1) // remove message id offset
+		size, err := io.ReadFull(connection, payload)
+		handleErr(err)
+		fmt.Printf("Payload: %d, size = %d\n", len(payload), size)
 
 		if messageId == expectedMessageId {
-			ignore := make([]byte, binary.BigEndian.Uint32(messageLengthPrefix))
-			_, err := connection.Read(ignore)
-			handleErr(err)
-			return
+			fmt.Printf("Return for MessageId: %d\n", messageId)
+			return payload
 		}
 	}
 }
@@ -198,39 +257,14 @@ func closeAllConnections(connections map[string]net.Conn) {
 	}
 }
 
-func createPeerMessage(messageId uint8, payload string) []byte {
+func createPeerMessage(messageId uint8, payload []byte) []byte {
 	// Peer messages consist of a message length prefix (4 bytes), message id (1 byte) and a payload (variable size).
 	messageData := make([]byte, 4+1+len(payload))
-	copy(messageData[0:4], "0000")
+	binary.BigEndian.PutUint32(messageData[0:4], uint32(1+len(payload)))
 	messageData[4] = messageId
 	copy(messageData[5:], payload)
 
 	return messageData
-}
-
-func handlePeerMessage(peerMessage []byte) {
-	messageId := int(peerMessage[4])
-	switch messageId {
-	case 5: // bitfield
-		fmt.Printf(" %v\n", messageId)
-		break
-
-	case 2: // interested
-		fmt.Printf(" %v\n", messageId)
-		break
-
-	case 1: // unchoke
-		fmt.Printf(" %v\n", messageId)
-		break
-
-	case 6: // bitfield
-		fmt.Printf(" %v\n", messageId)
-		break
-	case 7: // bitfield
-		fmt.Printf(" %v\n", messageId)
-		break
-
-	}
 }
 
 func getMetaInfo(fileNameOrPath string) (MetaInfo, error) {
