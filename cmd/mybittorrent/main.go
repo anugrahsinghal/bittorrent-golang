@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"github.com/jackpal/bencode-go"
@@ -76,27 +77,31 @@ func main() {
 			fmt.Println(err)
 			return
 		}
-		decoded, err := bencode.Decode(bytes.NewReader(file))
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		jsonOutput, _ := json.Marshal(decoded)
 
 		var metaInfo MetaInfo
-		if err := json.Unmarshal(jsonOutput, &metaInfo); err != nil {
+		if err := bencode.Unmarshal(bytes.NewReader(file), &metaInfo); err != nil {
 			fmt.Println("Error unmarshalling JSON:", err)
 			return
 		}
 
 		fmt.Printf("Tracker URL: %v\n", metaInfo.Announce)
 		fmt.Printf("Length: %v\n", metaInfo.Info.Length)
+		// %x for hex formatting
+		fmt.Printf("Info Hash: %x\n", createInfoHash(metaInfo))
 
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
+}
+
+func createInfoHash(metaInfo MetaInfo) interface{} {
+	var buffer_ bytes.Buffer
+	if err := bencode.Marshal(&buffer_, metaInfo.Info); err != nil {
+		return ""
+	}
+	sum := sha1.Sum(buffer_.Bytes())
+	return sum
 }
 
 type MetaInfo struct {
