@@ -203,22 +203,17 @@ func handshake(metaInfo MetaInfo, conn net.Conn) {
 	//copy(messageHolder[28:28+20], infoHash[:])
 	//copy(messageHolder[48:48+20], "00112233445566778899")
 
-	myStr :=
-		"BitTorrent protocol" + // fixed header
+	handshakeMessage :=
+		"" +
+			string(byte(19)) + // length of string `BitTorrent protocol`
+			"BitTorrent protocol" + // fixed header
 			"00000000" + // reserved bytes
 			string(infoHash[:]) +
 			"00112233445566778899" // peerId
 
-	// Convert int 19 to byte
-	b := make([]byte, 1)
-	b[0] = byte(19)
-
-	// Concatenate byte with rest of string
-	myBytes := append(b, []byte(myStr)...)
-
 	// issue here is that 19 is encoded as 2 characters instead of 1
-	//myStr := "19" + "BitTorrent protocol" + "00000000" + string(infoHash[:]) + "00112233445566778899"
-	_, err := conn.Write(myBytes)
+	//handshakeMessage := "19" + "BitTorrent protocol" + "00000000" + string(infoHash[:]) + "00112233445566778899"
+	_, err := conn.Write([]byte(handshakeMessage))
 	if err != nil {
 		fmt.Println(err)
 		panic(err)
