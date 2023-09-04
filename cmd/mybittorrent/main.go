@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/jackpal/bencode-go"
 	"log"
-	"math/rand"
 	"net"
 	"os"
 	"strconv"
@@ -23,11 +22,7 @@ func main() {
 	if command == "decode" {
 		bencodedValue := os.Args[2]
 		decoded, err := bencode.Decode(bytes.NewReader([]byte(bencodedValue)))
-
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
+		handleErr(err)
 
 		jsonOutput, _ := json.Marshal(decoded)
 		fmt.Println(string(jsonOutput))
@@ -35,10 +30,7 @@ func main() {
 		// read the file
 		fileNameOrPath := os.Args[2]
 		metaInfo, err := getMetaInfo(fileNameOrPath)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
+		handleErr(err)
 
 		fmt.Printf("Tracker URL: %v\n", metaInfo.Announce)
 		fmt.Printf("Length: %v\n", metaInfo.Info.Length)
@@ -48,7 +40,7 @@ func main() {
 		fmt.Printf("Info Hash: %x\n", sum)
 
 		//Piece Length: 262144
-		fmt.Printf("Piece Length: %v\n", metaInfo.Info.PiecesLen)
+		fmt.Printf("Piece Length: %v\n", metaInfo.Info.PieceLength)
 		//Piece Hashes:
 		// split metaInfo.Info.Pieces for each 20 bytes
 		// each 20 bytes is a SHA1 hash
@@ -64,20 +56,14 @@ func main() {
 		// read the file
 		fileNameOrPath := os.Args[2]
 		metaInfo, err := getMetaInfo(fileNameOrPath)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
+		handleErr(err)
 
 		printPeers(metaInfo)
 
 	} else if command == "handshake" {
 		fileNameOrPath := os.Args[2]
 		metaInfo, err := getMetaInfo(fileNameOrPath)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
+		handleErr(err)
 
 		peer := os.Args[3]
 		connection := createConnection(peer)
@@ -104,10 +90,9 @@ func main() {
 
 		pieces := getPieces(metaInfo)
 
-		piece := downloadPiece(pieceId, int(metaInfo.Info.PiecesLen), connections[peer], pieces)
+		piece := downloadPiece(pieceId, int(metaInfo.Info.PieceLength), connections[peer], pieces)
 		err = os.WriteFile(os.Args[3], piece, os.ModePerm)
 		handleErr(err)
-
 		//}
 	} else if command == "download" {
 		outPutFileName := os.Args[3]
@@ -119,46 +104,42 @@ func main() {
 		connections := map[string]net.Conn{}
 		defer closeAllConnections(connections)
 
-		rand.Shuffle(len(peers), func(i, j int) {
-			temp := peers[i]
-			peers[i] = peers[j]
-			peers[j] = temp
-		})
+		peerObj := peers[0]
+		peer := fmt.Sprintf("%s:%d", peerObj.IP, peerObj.Port)
 
-		for _, peerObj := range peers {
-			peer := fmt.Sprintf("%s:%d", peerObj.IP, peerObj.Port)
+		connections[peer] = createConnection(peer)
 
-			connections[peer] = createConnection(peer)
+		preDownload(metaInfo, connections[peer])
 
-			preDownload(metaInfo, connections[peer])
-
-			pieces := getPieces(metaInfo)
-			fmt.Printf("--------Total Pieces To Download: %d, Total Size: %d--------\n", len(pieces), metaInfo.Info.Length)
-			fullFile := make([]byte, metaInfo.Info.Length)
-			curr := 0
-			for pieceIndex, _ := range pieces {
-				fmt.Printf("Start download for piece %d\n", pieceIndex)
-				var piece []byte
-				// last piece
-				if pieceIndex == len(pieces)-1 {
-					lastPieceSize := metaInfo.Info.Length - (metaInfo.Info.PiecesLen * int64(pieceIndex))
-					fmt.Printf("Last Piece Size [%d - (%d*%d) = %d]\n", metaInfo.Info.Length, metaInfo.Info.PiecesLen, pieceIndex, lastPieceSize)
-					piece = downloadPiece(pieceIndex, int(lastPieceSize), connections[peer], pieces)
-				} else {
-					piece = downloadPiece(pieceIndex, int(metaInfo.Info.PiecesLen), connections[peer], pieces)
-				}
-				copy(fullFile[curr:], piece)
-				curr += len(piece)
-			}
-
-			err = os.WriteFile(outPutFileName, fullFile, os.ModePerm)
-			handleErr(err)
-			return
+		pieces := getPieces(metaInfo)
+		fmt.Printf("--------Total Pieces To Download: %d, Total Size: %d--------\n", len(pieces), metaInfo.Info.Length)
+		fullFile := make([]byte, metaInfo.Info.Length)
+		curr := 0
+		for pieceIndex, _ := range pieces {
+			fmt.Printf("Start download for piece %d\n", pieceIndex)
+			pieceLength := pieceLength(pieceIndex, pieces, metaInfo)
+			piece := downloadPiece(pieceIndex, pieceLength, connections[peer], pieces)
+			copy(fullFile[curr:], piece)
+			curr += len(piece)
 		}
+
+		err = os.WriteFile(outPutFileName, fullFile, os.ModePerm)
+		handleErr(err)
+		return
 
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
+	}
+}
+
+func pieceLength(pieceIndex int, pieces []string, metaInfo MetaInfo) int {
+	if pieceIndex != len(pieces)-1 {
+		return int(metaInfo.Info.PieceLength)
+	} else { // last piece
+		lastPieceSize := metaInfo.Info.Length - (metaInfo.Info.PieceLength * int64(pieceIndex))
+		fmt.Printf("Last Piece Size [%d - (%d*%d) = %d]\n", metaInfo.Info.Length, metaInfo.Info.PieceLength, pieceIndex, lastPieceSize)
+		return int(lastPieceSize)
 	}
 }
 
@@ -239,10 +220,10 @@ type MetaInfo struct {
 	Info     Info   `json:"info" bencode:"info"`
 }
 type Info struct {
-	Length    int64  `json:"length" bencode:"length"`
-	Name      string `json:"name" bencode:"name"`
-	PiecesLen int64  `json:"piece length" bencode:"piece length"`
-	Pieces    string `json:"pieces" bencode:"pieces"`
+	Length      int64  `json:"length" bencode:"length"`
+	Name        string `json:"name" bencode:"name"`
+	PieceLength int64  `json:"piece length" bencode:"piece length"`
+	Pieces      string `json:"pieces" bencode:"pieces"`
 }
 type TrackerResponse struct {
 	Interval int64  `json:"interval" bencoded:"interval"`
