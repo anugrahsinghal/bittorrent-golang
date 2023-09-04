@@ -6,7 +6,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
+	"net/http"
+	"net/url"
+	"strconv"
 )
 
 const INTERESTED = 2
@@ -142,6 +146,101 @@ func createPeerMessage(messageId uint8, payload []byte) []byte {
 	copy(messageData[5:], payload)
 
 	return messageData
+}
+
+func makeGetRequest(metaInfo MetaInfo) ([]byte, error) {
+	baseUrl := metaInfo.Announce
+	params := url.Values{}
+	infoHash := createInfoHash(metaInfo)
+	// took help from code examples for - string(infoHash[:])
+	params.Add("info_hash", string(infoHash[:]))
+	params.Add("peer_id", "00112233445566778899")
+	params.Add("port", "6881")
+	params.Add("uploaded", "0")
+	params.Add("downloaded", "0")
+	params.Add("left", strconv.Itoa(int(metaInfo.Info.Length)))
+	params.Add("compact", "1")
+
+	// Escape the params
+	escapedParams := params.Encode()
+
+	// Construct full URL
+	URI := fmt.Sprintf("%s?%s", baseUrl, escapedParams)
+	fmt.Printf("URI %v\n", URI)
+
+	resp, err := http.DefaultClient.Get(URI)
+
+	//fmt.Printf("StatusCode = %v\n", resp.Status)
+	if err != nil {
+		return []byte{}, err
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return []byte{}, err
+	}
+
+	return body, nil
+}
+
+func createConnection(peer string) net.Conn {
+	// Connect to a TCP server
+	conn, err := net.Dial("tcp", peer)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+	return conn
+}
+
+func handshake(metaInfo MetaInfo, conn net.Conn) {
+	infoHash := createInfoHash(metaInfo)
+	//messageHolder := make([]byte, 1+19+8+20+20)
+	//messageHolder[0] = 19
+	//copy(messageHolder[1:1+19], "BitTorrent protocol")
+	//copy(messageHolder[20:20+8], make([]byte, 8))
+	//copy(messageHolder[28:28+20], infoHash[:])
+	//copy(messageHolder[48:48+20], "00112233445566778899")
+
+	myStr :=
+		"BitTorrent protocol" + // fixed header
+			"00000000" + // reserved bytes
+			string(infoHash[:]) +
+			"00112233445566778899" // peerId
+
+	// Convert int 19 to byte
+	b := make([]byte, 1)
+	b[0] = byte(19)
+
+	// Concatenate byte with rest of string
+	myBytes := append(b, []byte(myStr)...)
+
+	// issue here is that 19 is encoded as 2 characters instead of 1
+	//myStr := "19" + "BitTorrent protocol" + "00000000" + string(infoHash[:]) + "00112233445566778899"
+	_, err := conn.Write(myBytes)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+
+	fmt.Println("Handshake Message Sent, waiting for handshake message myself")
+
+	// Receive response
+	buf := make([]byte, 1+19+8+20+20)
+	_, err = conn.Read(buf)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+
+	fmt.Printf("Peer ID: %x\n", string(buf[48:]))
+}
+
+func closeAllConnections(connections map[string]net.Conn) {
+	for _, conn := range connections {
+		conn.Close()
+	}
 }
 
 type RequestPayload struct {
